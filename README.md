@@ -41,13 +41,21 @@ venv/bin/pip install -r requirements.txt
 
 **第四步：配置 API Key**
 
-在项目根目录新建一个 `.env` 文件（注意文件名以点开头），写入：
+在项目根目录新建一个 `.env` 文件（注意文件名以点开头），按需填写（用哪家填哪家）：
 
 ```
-ANTHROPIC_API_KEY=你的key粘贴在这里
-```
+# Claude（Anthropic）
+ANTHROPIC_API_KEY=sk-ant-api03-...
 
-API Key 格式类似 `sk-ant-api03-...`，从 Anthropic Console 获取。
+# ChatGPT（OpenAI）
+OPENAI_API_KEY=sk-proj-...
+
+# Gemini（Google）
+GOOGLE_API_KEY=AIzaSy...
+
+# 可选：设置默认使用的模型（否则默认用 Claude Haiku）
+DEFAULT_CORRECTION_MODEL=gemini-2.0-flash
+```
 
 > `.env` 文件不会被上传到 GitHub，只存在你本地。
 
@@ -118,10 +126,30 @@ venv/bin/python tools/process_video.py 视频.mp4 --no-seeds
 venv/bin/python tools/process_video.py 视频.mp4 --max-chars 25
 ```
 
-**使用更强的 Claude 模型（默认是 haiku，最快最便宜；sonnet 更准但慢）：**
+**切换 LLM 提供商（支持 Claude / OpenAI / Gemini）：**
 
 ```bash
+# Claude（默认）
+venv/bin/python tools/process_video.py 视频.mp4 --model claude-haiku-4-5-20251001
 venv/bin/python tools/process_video.py 视频.mp4 --model claude-sonnet-4-6
+
+# OpenAI
+venv/bin/python tools/process_video.py 视频.mp4 --model gpt-4o
+venv/bin/python tools/process_video.py 视频.mp4 --model gpt-4o-mini
+
+# Google Gemini
+venv/bin/python tools/process_video.py 视频.mp4 --model gemini-2.0-flash
+venv/bin/python tools/process_video.py 视频.mp4 --model gemini-2.5-pro
+```
+
+工具根据模型名前缀自动识别提供商（`claude-*` / `gpt-*` / `gemini-*`）。
+
+**设置默认模型（不想每次加 --model）：**
+
+在 `.env` 文件里加一行：
+
+```
+DEFAULT_CORRECTION_MODEL=gemini-2.0-flash
 ```
 
 ---
