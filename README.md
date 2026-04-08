@@ -1,6 +1,19 @@
-# 课代表字幕自动校对工具 v2
+# 课代表视频处理工具 v3
 
-把视频拖进去，自动转录 + 校对，输出可直接导入剪辑软件的 `.srt` 字幕文件。
+把视频拖进去，自动完成六步流程：转录 → 字幕校对 → 断句 → 文章 → 高光提取 → 标题生成。
+
+**六步流程一览：**
+
+| 步骤 | 内容 | 依赖 |
+|------|------|------|
+| 1. 转录 | Qwen3-ASR 本地转录，输出 `.qwen.srt` | 本地模型（离线） |
+| 2. 字幕校对 | Claude 纠错专有名词/语气词，输出 `.corrected.srt` | Anthropic API |
+| 3. 断句 | 每条 ≤20 字重新断句，输出 `.final.srt` | 本地规则 |
+| 4. 生成文章 | 提炼频道风格文章，输出 `.article.md` | Claude API |
+| 5. 提取高光 | 识别/格式化视频开头高光片段，输出 `.highlights.md` | Claude Code CLI |
+| 6. 生成标题 | 三轮 Opus 工作流（高光驱动），输出 `.titles.md` | Claude Code CLI |
+
+> 步骤 1-4 只需 Anthropic API Key。步骤 5-6 还需要安装 **Claude Code CLI**（`claude` 命令）。
 
 ---
 
@@ -90,13 +103,17 @@ venv/bin/python tools/process_video.py /path/to/视频.mp4
 
 ## 输出文件
 
-工具完成后，在**视频同目录**生成三个文件：
+工具完成后，在**视频同目录**生成以下文件：
 
 | 文件 | 说明 | 用途 |
 |------|------|------|
 | `视频名.qwen.srt` | Qwen 原始转录，未校对 | 备份，一般不用 |
 | `视频名.corrected.srt` | Claude 校对后的字幕 | 备份 |
 | `视频名.final.srt` | 最终字幕，每条 ≤20字断句 | **导入剪辑软件用这个** |
+| `视频名.article.md` | 频道风格文章 | 内容归档，也是标题生成的输入 |
+| `视频名.highlights.md` | 视频开头高光片段（中心命题+受众分析+叙事弧） | 标题锚点 |
+| `视频名.titles.md` | 最终标题候选（8-10个）+ 封面建议 | **取标题用这个** |
+| `视频名_title_ws/` | 标题生成中间文件（round0/round1） | 调试用，可删 |
 
 ---
 
@@ -185,13 +202,44 @@ A：调整 `--max-chars` 参数（默认 20 字）；或者直接在剪辑软件
 
 ---
 
+## 常用参数（跳过某些步骤）
+
+```bash
+# 跳过转录（已有 .qwen.srt）
+venv/bin/python tools/process_video.py 视频.mp4 --skip-transcribe
+
+# 跳过文章生成
+venv/bin/python tools/process_video.py 视频.mp4 --skip-article
+
+# 跳过高光提取（不需要标题，或手动写了 .highlights.md）
+venv/bin/python tools/process_video.py 视频.mp4 --skip-highlights
+
+# 只要字幕，跳过文章/高光/标题
+venv/bin/python tools/process_video.py 视频.mp4 --skip-article --skip-highlights --skip-titles
+```
+
+---
+
 ## 工具说明
 
 | 脚本 | 功能 |
 |------|------|
-| `tools/process_video.py` | 主入口，转录 + 校对 + 断句一体化 |
-| `tools/correct/correct_srt.py` | 校对引擎（可单独调用） |
+| `tools/process_video.py` | 主入口，6步流程一体化 |
+| `tools/correct/correct_srt.py` | 字幕校对引擎（可单独调用） |
 | `tools/resplit_srt.py` | 断句工具（可单独调用） |
-| `data/channel_vocab.json` | 频道词汇表（从171期历史字幕提炼）|
+| `tools/generate_article.py` | 文章生成（可单独调用） |
+| `tools/generate_highlights.py` | 高光提取（可单独调用） |
+| `tools/generate_titles.py` | 标题生成，三轮 Opus 工作流（可单独调用） |
+| `data/channel_vocab.json` | 频道词汇表（从历史字幕提炼）|
 
 技术设计文档见 [DESIGN.md](DESIGN.md)。
+
+**单独调用高光/标题（对已有 SRT 补跑）：**
+
+```bash
+# 单独跑高光
+venv/bin/python tools/generate_highlights.py /path/to/视频名.final.srt
+
+# 单独跑标题（自动检测同目录的 .highlights.md）
+venv/bin/python tools/generate_titles.py /path/to/视频名.article.md
+```

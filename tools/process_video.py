@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-process_video.py v2 — 视频转录 + 字幕校对一体化入口
+process_video.py v3 — 视频转录 + 字幕校对 + 文章 + 高光 + 标题一体化入口
 
-改进点（相比 v1）：
-  1. 转录前询问本期嘉宾名/术语（传给 Qwen3-ASR context= 参数引导解码）
-  2. 加载 channel_vocab.json 的频道词汇作为基础 context
-  3. 校对引擎使用简化版 v7 策略（候选词驱动，不自由改写）
+六步流程：
+  1. Qwen3-ASR 转录
+  2. Claude 字幕校对
+  3. 断句处理
+  4. 生成频道风格文章
+  5. 提取视频高光片段（NEW：扫描全片选 3-5 个高光，供标题锚定）
+  6. 生成播客标题（高光驱动，三轮 claude-opus-4-6 工作流）
 
 用法：
   python3 tools/process_video.py video.mp4
   python3 tools/process_video.py video.mp4 --skip-transcribe
-  python3 tools/process_video.py video.mp4 --seeds 刘嘉 "Superlinear Academy" 鸭哥
+  python3 tools/process_video.py video.mp4 --seeds 刘嘉 "Superlinear Academy"
   python3 tools/process_video.py video.mp4 --model claude-sonnet-4-6
-  python3 tools/process_video.py video.mp4 --no-seeds   # 跳过 seeds 输入提示
+  python3 tools/process_video.py video.mp4 --no-seeds
+  python3 tools/process_video.py video.mp4 --skip-article
+  python3 tools/process_video.py video.mp4 --skip-highlights   # 跳过高光提取
+  python3 tools/process_video.py video.mp4 --skip-titles
 """
 
 import argparse
@@ -165,11 +171,62 @@ def resplit(corrected_srt: Path, max_chars: int = 20) -> Path | None:
         return None
 
 
+def article(final_srt: Path) -> Path | None:
+    sys.path.insert(0, str(_TOOLS))
+    from generate_article import generate_article
+    t0 = time.time()
+    print(f"  生成文章…", flush=True)
+    try:
+        result = generate_article(final_srt)
+        elapsed = time.time() - t0
+        print(f"  ✓ 文章完成  {elapsed:.0f}s  → {result.name}")
+        return result
+    except Exception as e:
+        print(f"  ✗ 文章生成失败: {e}")
+        return None
+
+
+def highlights(srt_path: Path) -> Path | None:
+    sys.path.insert(0, str(_TOOLS))
+    from generate_highlights import generate_highlights
+    t0 = time.time()
+    print(f"  提取高光片段…", flush=True)
+    try:
+        result = generate_highlights(srt_path)
+        elapsed = time.time() - t0
+        print(f"  ✓ 高光完成  {elapsed:.0f}s  → {result.name}")
+        return result
+    except Exception as e:
+        print(f"  ✗ 高光提取失败: {e}")
+        return None
+
+
+def titles(content_path: Path) -> Path | None:
+    sys.path.insert(0, str(_TOOLS))
+    from generate_titles import generate_titles
+    t0 = time.time()
+    print(f"  生成标题（三轮，高光驱动）…", flush=True)
+    try:
+        result = generate_titles(content_path)
+        elapsed = time.time() - t0
+        print(f"  ✓ 标题完成  {elapsed:.0f}s  → {result.name}")
+        return result
+    except Exception as e:
+        print(f"  ✗ 标题生成失败: {e}")
+        return None
+
+
 def main():
-    parser = argparse.ArgumentParser(description="视频转录 + 字幕校对 v2")
+    parser = argparse.ArgumentParser(description="视频转录 + 字幕校对 + 文章 + 标题 v2")
     parser.add_argument("video", help="视频文件路径")
     parser.add_argument("--skip-transcribe", action="store_true")
     parser.add_argument("--skip-correct", action="store_true")
+    parser.add_argument("--skip-article", action="store_true",
+                        help="跳过文章生成")
+    parser.add_argument("--skip-highlights", action="store_true",
+                        help="跳过高光提取")
+    parser.add_argument("--skip-titles", action="store_true",
+                        help="跳过标题生成")
     parser.add_argument("--seeds", nargs="*", default=None,
                         help="本期嘉宾/术语（跳过交互式询问）")
     parser.add_argument("--no-seeds", action="store_true",
@@ -186,6 +243,7 @@ def main():
 
     print(f"\n{'='*55}")
     print(f"视频: {video_path.name}")
+    print(f"流程: 转录 → 校对 → 断句 → 文章 → 高光 → 标题")
     print(f"{'='*55}")
 
     # ── 决定 episode_seeds ───────────────────────────────────────────────────
@@ -202,7 +260,7 @@ def main():
 
     # ── 1. 转录 ───────────────────────────────────────────────────────────────
     if not args.skip_transcribe:
-        print("\n[1/2] Qwen3-ASR 转录")
+        print("\n[1/5] Qwen3-ASR 转录")
         channel_ctx = load_channel_context()
         context = build_transcribe_context(channel_ctx, episode_seeds)
         qwen_srt = transcribe(video_path, context=context)
@@ -211,29 +269,88 @@ def main():
         if not qwen_srt.exists():
             print(f"错误: --skip-transcribe 但找不到 {qwen_srt.name}")
             sys.exit(1)
-        print(f"\n[1/2] 转录 (已跳过) → {qwen_srt.name}")
+        print(f"\n[1/5] 转录 (已跳过) → {qwen_srt.name}")
 
     # ── 2. 校对 ───────────────────────────────────────────────────────────────
     corrected_srt = None
     if not args.skip_correct:
-        print("\n[2/3] Claude 字幕校对 + 全文扫描")
+        print("\n[2/5] Claude 字幕校对 + 全文扫描")
         corrected_srt = correct(qwen_srt, episode_seeds, model=args.model)
     else:
         corrected_srt = video_path.with_suffix("").with_suffix(".corrected.srt")
         if not corrected_srt.exists():
             corrected_srt = None
-        print(f"\n[2/3] 校对 (已跳过)")
+        print(f"\n[2/5] 校对 (已跳过)")
 
     # ── 3. 断句 ───────────────────────────────────────────────────────────────
-    print(f"\n[3/3] 断句处理")
+    print(f"\n[3/5] 断句处理")
+    final_srt = None
     if corrected_srt and corrected_srt.exists():
-        resplit(corrected_srt, max_chars=args.max_chars)
+        final_srt = resplit(corrected_srt, max_chars=args.max_chars)
     else:
         print("  (无校对文件，跳过)")
+        # 降级：用 corrected 或 qwen 作为来源
+        for candidate in [
+            video_path.with_suffix("").with_suffix(".final.srt"),
+            video_path.with_suffix("").with_suffix(".corrected.srt"),
+            video_path.with_suffix("").with_suffix(".qwen.srt"),
+        ]:
+            if candidate.exists():
+                final_srt = candidate
+                break
+
+    # ── 4. 生成文章 ───────────────────────────────────────────────────────────
+    article_path = None
+    if not args.skip_article:
+        print(f"\n[4/6] 生成频道风格文章")
+        src = final_srt or corrected_srt or qwen_srt
+        if src and src.exists():
+            article_path = article(src)
+        else:
+            print("  (无可用 SRT，跳过)")
+    else:
+        candidate = video_path.with_suffix("").with_suffix(".article.md")
+        if candidate.exists():
+            article_path = candidate
+        print(f"\n[4/6] 文章生成 (已跳过)")
+
+    # ── 5. 提取高光 ───────────────────────────────────────────────────────────
+    highlights_path = None
+    if not args.skip_highlights:
+        print(f"\n[5/6] 提取视频高光片段")
+        src = final_srt or corrected_srt or qwen_srt
+        if src and src.exists():
+            highlights_path = highlights(src)
+        else:
+            print("  (无可用 SRT，跳过)")
+    else:
+        # 检查是否已有高光文件
+        stem = video_path.with_suffix("").stem
+        candidate = video_path.parent / f"{stem}.highlights.md"
+        if candidate.exists():
+            highlights_path = candidate
+        print(f"\n[5/6] 高光提取 (已跳过)")
+
+    # ── 6. 生成标题 ───────────────────────────────────────────────────────────
+    if not args.skip_titles:
+        print(f"\n[6/6] 生成播客标题（高光驱动）")
+        # 优先用 article，其次 final_srt — highlights 会通过文件名自动检测
+        src = article_path or final_srt or corrected_srt or qwen_srt
+        if src and src.exists():
+            titles(src)
+        else:
+            print("  (无可用来源，跳过)")
+    else:
+        print(f"\n[6/6] 标题生成 (已跳过)")
 
     print(f"\n{'='*55}")
-    for suf in [".qwen.srt", ".corrected.srt", ".final.srt"]:
+    for suf in [".qwen.srt", ".corrected.srt", ".final.srt",
+                ".article.md", ".highlights.md", ".titles.md"]:
         p = video_path.with_suffix("").with_suffix(suf)
+        if suf == ".highlights.md":
+            # highlights 文件名不带 video 后缀，单独处理
+            stem = video_path.with_suffix("").stem
+            p = video_path.parent / f"{stem}.highlights.md"
         print(f"  {'✓' if p.exists() else '✗'} {p.name}")
     print()
 

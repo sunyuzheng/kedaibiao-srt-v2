@@ -25,7 +25,7 @@ from pathlib import Path
 _ROOT = Path(__file__).parent.parent
 _CHANNEL = Path("/Users/sunyuzheng/Desktop/AI/content/kedaibiao-channel")
 _ERROR_NOTEBOOK = _CHANNEL / "logs" / "error_notebook.jsonl"
-_CHANNEL_CANDIDATES = Path("/Users/sunyuzheng/Desktop/AI/content/kedaibiao-srt/logs/correction_candidates.json")
+_CHANNEL_CANDIDATES = _ROOT / "data" / "correction_candidates.json"
 
 ARCHIVE_DIRS = [
     _CHANNEL / "archive" / "有人工字幕",

@@ -26,5 +26,14 @@ env/
 *.corrected.srt
 *.final.srt
 
+# 生成的内容文件（本地产物）
+*.article.md
+*.highlights.md
+*.titles.md
+*_title_ws/
+
+# 运行时数据（不纳入版本管理）
+data/correction_candidates.json
+
 # macOS
 .DS_Store
