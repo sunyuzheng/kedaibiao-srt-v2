@@ -8,12 +8,6 @@ generate_highlights.py — 从 SRT 逐字稿提取高光片段 v2
      如果存在，用它作为权威高光来源进行分析
   2. 不存在时，用分区采样全文扫描
 
-高光的目标：
-  - 3-5 段精选片段（理想 3 段），放到视频开头 30-90 秒
-  - 让观众感受到"这期很值"
-  - 为标题提供具体的素材支撑
-  - 访谈优先选嘉宾说的话；单口选主播的核心论断
-
 用法：
   python3 tools/generate_highlights.py episode.final.srt
 """
@@ -23,6 +17,15 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+_REPO_DATA = Path(__file__).parent.parent / "data"
+_GUIDELINE = _REPO_DATA / "guideline_kedaibiao.md"
+
+
+def load_guideline() -> str:
+    if _GUIDELINE.exists():
+        return _GUIDELINE.read_text(encoding="utf-8")
+    return ""
 
 
 # ── SRT 解析工具 ───────────────────────────────────────────────────────────────
@@ -118,6 +121,12 @@ def call_claude(prompt: str, timeout: int = 900) -> str:
 HIGHLIGHTS_FROM_ACTUAL = """\
 你是课代表立正频道的内容编辑。
 
+## 频道 Guideline（参考）
+
+{guideline}
+
+---
+
 以下是编辑者已亲手选定的视频开头高光片段（30-90秒）。这是真实使用的开场钩子。
 
 ## 实际高光文本
@@ -140,13 +149,19 @@ HIGHLIGHTS_FROM_ACTUAL = """\
 HIGHLIGHTS_FROM_SCAN = """\
 你是课代表立正频道的内容编辑，负责为视频选取开场高光片段（30-90秒）。
 
-目的：让刚点进来的观众立刻感觉"这期很值"，同时制造悬念——听完某句话后，观众想知道"为什么？怎么来的？后来呢？"
+## 频道 Guideline（参考）
+
+{guideline}
+
+---
 
 ## 本期内容
 
 {content}
 
 ---
+
+目的：让刚点进来的观众立刻感觉"这期很值"，同时制造悬念——听完某句话后，观众想知道"为什么？怎么来的？后来呢？"
 
 先理解这期内容：中心命题是什么，最有张力的故事或时刻在哪里，访谈还是单口。
 
@@ -174,17 +189,20 @@ def generate_highlights(srt_path: Path) -> Path:
         full_text = srt_to_text(srt_path)
         actual_highlights = extract_appended_highlights(srt_path)
 
+    guideline = load_guideline()
+
     if actual_highlights:
         print(f"    ✓ 检测到编辑者亲选的高光字幕（{len(actual_highlights)} 字），优先使用")
         content_sample = sample_content(full_text, max_chars=8000)
         prompt = HIGHLIGHTS_FROM_ACTUAL.format(
+            guideline=guideline,
             highlights_text=actual_highlights,
             content_sample=content_sample,
         )
     else:
         print(f"    ! 未检测到追加高光，扫描全文选取")
         content = sample_content(full_text, max_chars=14000)
-        prompt = HIGHLIGHTS_FROM_SCAN.format(content=content)
+        prompt = HIGHLIGHTS_FROM_SCAN.format(guideline=guideline, content=content)
 
     print("    高光分析中…", flush=True)
     result = call_claude(prompt, timeout=900)
