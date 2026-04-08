@@ -1,0 +1,2 @@
+anthropic>=0.40.0
+mlx-qwen3-asr>=0.1.0
